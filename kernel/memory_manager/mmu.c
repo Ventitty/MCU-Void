@@ -1,7 +1,7 @@
 #include "kernel/memory_manager/mmu.h"
 
-extern void *_heap_start;
-extern void *_heap_end;
+extern uint8_t _heap_start[];
+extern uint8_t _heap_end[];
 
 static void *_heap_current = NULL;
 static block_t *alloc_list = NULL;
@@ -16,7 +16,7 @@ void *sbrk(size_t size) {
         return NULL;
     }
 
-    size_t heap_size = (size_t)(_heap_end - _heap_current);
+    size_t heap_size = (size_t)(_heap_end - (uint8_t *) _heap_current);
 
     if (heap_size >= size) {
         void *ptr = _heap_current;
@@ -49,7 +49,7 @@ void *nmap(size_t size) {
             }
 
             iter_free->free = 0;
-            return iter_free + HEADER_SIZE;
+            return (uint8_t *) iter_free + HEADER_SIZE;
         }
 
         iter_free = iter_free->next;
@@ -72,9 +72,11 @@ void *nmap(size_t size) {
 
             iter_free->next = new_alloc;
         }
+
+        return (uint8_t *) new_alloc + HEADER_SIZE;
     }
 
-    return new_alloc;
+    return NULL;
 }
 
 void  unmap(void *ptr) {

@@ -20,6 +20,7 @@ rm -f ${KERNEL_ELF}
 echo "[2/3] Compilation du kernel"
 
 ${CC} -nostdlib -T ${LINKER_SCRIPT} -g -O2 -mtext-section-literals \
+    -mabi=call0 \
     ${INCLUDES} \
     -o ${KERNEL_ELF} \
     ${ARCH_DIR}/boot/boot.S ${SRC_DIR}/kernel.c ${SRC_DIR}/memory_manager/mmu.c
@@ -32,4 +33,4 @@ ${QEMU} \
     -machine ${CHIP} \
     -nographic \
     -kernel ${KERNEL_ELF} \
-    -bios none \
+    -bios none
