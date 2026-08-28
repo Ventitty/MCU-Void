@@ -19,7 +19,7 @@ rm -f ${KERNEL_ELF}
 
 echo "[2/3] Compilation du kernel"
 
-${CC} -nostdlib -T ${LINKER_SCRIPT} -g -O0 -fno-tree-loop-distribute-patterns -mtext-section-literals -mlongcalls -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
+${CC} -nostdlib -T ${LINKER_SCRIPT} -g -fno-tree-loop-distribute-patterns -mtext-section-literals -mlongcalls -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
     -mabi=call0 \
     ${INCLUDES} \
     -o ${KERNEL_ELF} \
