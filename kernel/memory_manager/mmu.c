@@ -20,7 +20,7 @@ void *sbrk(size_t size) {
 
     if (heap_size >= size) {
         void *ptr = _heap_current;
-        _heap_current = _heap_current + size;
+        _heap_current = (uint8_t *)_heap_current + size;
 
         return ptr;
     }
@@ -33,7 +33,7 @@ void *nmap(size_t size) {
         return NULL;
     }
 
-    size_t total_size = ALIGN_UP(size + HEADER_SIZE, 4096);
+    size_t total_size = ALIGN_UP(size + HEADER_SIZE, 64);
     block_t *iter_free = alloc_list;
 
     while (iter_free != NULL) {
