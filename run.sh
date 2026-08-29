@@ -19,7 +19,7 @@ rm -f ${KERNEL_ELF}
 
 echo "[2/3] Compilation du kernel"
 
-${CC} -nostdlib -T ${LINKER_SCRIPT} -g -fno-tree-loop-distribute-patterns -mtext-section-literals -mlongcalls -fno-builtin -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -Werror -std=c99 -pedantic \
+${CC} -nostdlib -T ${LINKER_SCRIPT} -g -fno-tree-loop-distribute-patterns -mtext-section-literals -mlongcalls -fno-builtin -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -Werror -std=c99 -pedantic -ffreestanding \
     -mabi=call0 \
     ${INCLUDES} \
     -o ${KERNEL_ELF} \
@@ -31,5 +31,7 @@ echo "[3/3] Démarrage de QEMU"
 
 ${QEMU} \
     -machine ${CHIP} \
-    -nographic \
-    -kernel ${KERNEL_ELF}
+    -display none \
+    -serial mon:stdio \
+    -kernel ${KERNEL_ELF} \
+    -d int,guest_errors -D /tmp/int-trace.log

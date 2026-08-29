@@ -21,33 +21,33 @@ void uart_print(const char *str) {
     }
 }
 
+static const char* get_exception_cause_string(uint32_t cause) {
+    switch (cause) {
+        case 0:  return "Illegal Instruction";
+        case 1:  return "System Call (Syscall)";
+        case 2:  return "Instruction Fetch Error";
+        case 3:  return "Load/Store Error";
+        case 4:  return "Level-1 Interrupt";
+        case 5:  return "Alloca Exception";
+        case 6:  return "Integer Divide By Zero";
+        case 9:  return "Load/Store Alignment Error";
+        case 12: return "PIF Data Error";
+        case 28: return "Load Prohibit (Null pointer read / Invalid memory access)";
+        case 29: return "Store Prohibit (Null pointer write / Protected memory write)";
+        default: return "Unknown / Reserved Exception";
+    }
+}
+
 void c_interrupt_handler(interrupt_context_t *ctx) {
-    uart_print("\n\r[PANIC] Exception !\n\r");
+    if (ctx->exccause == 4) {
+        return;
+    }
 
-    if (ctx->exccause != 0) {
-        if (ctx->exccause == 6) {
-            uart_print("\n\r========================================\n\r");
-            uart_print("[PANIC] EXCEPTION : Division par ZERO !\n\r");
-            uart_print("========================================\n\r");
+    uart_print("[PANIC] Interrupt detected ! ");
+    uart_print(get_exception_cause_string(ctx->exccause));
+    uart_print("\n");
 
-            while(1);
-        } else if (UART0_INT_ST & (1 << 0)) {
-            while ((UART0_STATUS & 0x3FF) > 0) {
-                char c = *UART0_FIFO;
-                *UART0_FIFO = c;
-
-                if (c == '0') {
-                    trigger_div_zero = 1;
-                }
-            }
-            UART0_INT_CLR = 0xFFFF;
-
-            xtensa_clear_interrupts(1 << 1);
-        }
-    } else {
-        uart_print("\n\r[PANIC] Exception inconnue !\n\r");
-
-        while(1);
+    while (1) {
     }
 }
 
@@ -76,17 +76,15 @@ void kernel(void) {
 
     uart_print(alloc);
 
-    uart_print("Kernel demarre. Tapez du texte pour l'echo.\n\r");
-    uart_print("Tapez '0' pour provoquer une division par zero.\n\r> ");
-
-    volatile int a = 42;
-    volatile int b = 0;
+    uart_print("Kernel is UP ! Input text to echo it.\n\r");
 
     while (1) {
-        if (trigger_div_zero) {
-            trigger_div_zero = 0;
-
-            a = a / b;
+        while (1) {
+            if ((UART0_STATUS & 0x1FF) > 0) {
+                char c = *UART0_FIFO;
+                uart_putchar(c);
+                __asm__ volatile("ill");
+            }
         }
     }
 }

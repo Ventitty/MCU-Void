@@ -1,91 +1,245 @@
-.section .iram0.text, "ax"
-.align 1024       /* VECBASE DOIT être aligné sur 1024 octets (0x400) */
-.global _vector_base
-_vector_base:
-    .space 0x340  /* Décalage exact pour le UserExceptionVector en Niveau 1 */
+/******************************************************************************************
+  Filename    : IntVectTable.s / vector.S
+  Core        : Xtensa LX7
+  MCU         : ESP32-S3
+  Description : Interrupt vector tables and context switching for ESP32-S3 Bare-Metal
+******************************************************************************************/
 
-.global _UserExceptionVector
-_UserExceptionVector:
-    /* 1. Allouer la trame de pile (96 octets) */
-    /* 16 registres généraux + 4 registres spéciaux = 20 * 4 = 80 octets. On arrondit à 96. */
+/* =======================================================================================
+   MACROS DE SAUVEGARDE ET RESTAURATION DU CONTEXTE CPU (Compatible Call0 ABI)
+   ======================================================================================= */
+
+.macro SaveCpuContext
+    /* 1. Allocation de la trame de pile (96 octets alignés sur 16) */
     addi sp, sp, -96
 
-    /* 2. Sauvegarder a0 et a2 à a15 */
-    s32i a0, sp, 0
-    s32i a2, sp, 8
-    s32i a3, sp, 12
-    s32i a4, sp, 16
-    s32i a5, sp, 20
-    s32i a6, sp, 24
-    s32i a7, sp, 28
-    s32i a8, sp, 32
-    s32i a9, sp, 36
-    s32i a10, sp, 40
-    s32i a11, sp, 44
-    s32i a12, sp, 48
-    s32i a13, sp, 52
-    s32i a14, sp, 56
-    s32i a15, sp, 60
+    /* 2. Sauvegarde des registres généraux */
+    s32i.n a0,  sp, 0*4
+    s32i.n a2,  sp, 2*4
+    s32i.n a3,  sp, 3*4
+    s32i.n a4,  sp, 4*4
+    s32i.n a5,  sp, 5*4
+    s32i.n a6,  sp, 6*4
+    s32i.n a7,  sp, 7*4
+    s32i.n a8,  sp, 8*4
+    s32i.n a9,  sp, 9*4
+    s32i.n a10, sp, 10*4
+    s32i.n a11, sp, 11*4
+    s32i.n a12, sp, 12*4
+    s32i.n a13, sp, 13*4
+    s32i.n a14, sp, 14*4
+    s32i.n a15, sp, 15*4
 
-    /* Calculer et sauvegarder le a1 original (le SP d'avant l'interruption) */
+    /* Sauvegarde du SP original (a1) à l'offset 4 */
     addi a2, sp, 96
-    s32i a2, sp, 4
+    s32i.n a2, sp, 1*4
 
-    /* 3. Sauvegarder les registres spéciaux */
-    /* EPC1 : Exception Program Counter (Adresse où le CPU doit retourner) */
-    rsr.epc1 a2
-    s32i a2, sp, 64
+    /* 3. Sauvegarde des registres spéciaux */
+    rsr a2, epc1
+    s32i a2, sp, 16*4
 
-    /* PS : Processor Status (Niveau de privilège et statut des interruptions) */
-    rsr.ps a2
-    s32i a2, sp, 68
+    rsr a2, ps
+    s32i a2, sp, 17*4
 
-    /* SAR : Shift Amount Register (Vital ! Le code C l'utilise en arrière-plan) */
-    rsr.sar a2
-    s32i a2, sp, 72
+    rsr a2, sar
+    s32i a2, sp, 18*4
 
-    /* EXCCAUSE : Cause de l'exception (utile pour le diagnostic) */
-    rsr.exccause a2
-    s32i a2, sp, 76
+    rsr a2, exccause
+    s32i a2, sp, 19*4
 
-    /* 4. Appel du gestionnaire en C */
-    /* On place 'sp' dans 'a2' pour le passer comme premier argument à la fonction C */
-    mov a2, sp
-    call0 c_interrupt_handler
+    /* 4. Désactivation de PS.EXCM (Bit 4) pour autoriser l'exécution du C */
+    rsr a2, ps
+    movi a3, ~0x10
+    and a2, a2, a3
+    wsr a2, ps
+    rsync
+.endm
 
-    /* 5. Restaurer les registres spéciaux */
-    l32i a2, sp, 64
-    wsr.epc1 a2
-
-    l32i a2, sp, 68
-    wsr.ps a2
-
-    l32i a2, sp, 72
-    wsr.sar a2
-
-    /* Synchroniser le pipeline CPU après avoir modifié des registres de contrôle (PS) */
+.macro RestoreCpuContext
+    /* 1. Réactivation de PS.EXCM (Bit 4) avant de quitter l'exception */
+    rsr a2, ps
+    movi a3, 0x10
+    or a2, a2, a3
+    wsr a2, ps
     rsync
 
-    /* 6. Restaurer les registres généraux */
-    l32i a0, sp, 0
-    l32i a2, sp, 8
-    l32i a3, sp, 12
-    l32i a4, sp, 16
-    l32i a5, sp, 20
-    l32i a6, sp, 24
-    l32i a7, sp, 28
-    l32i a8, sp, 32
-    l32i a9, sp, 36
-    l32i a10, sp, 40
-    l32i a11, sp, 44
-    l32i a12, sp, 48
-    l32i a13, sp, 52
-    l32i a14, sp, 56
-    l32i a15, sp, 60
+    /* 2. Restauration des registres spéciaux */
+    l32i a2, sp, 16*4
+    wsr a2, epc1
 
-    /* 7. Libérer la pile et quitter l'interruption */
-    /* a1 (sp) est restauré ici de facto */
+    l32i a2, sp, 18*4
+    wsr a2, sar
+    rsync
+
+    /* 3. Restauration des registres généraux */
+    l32i.n a0,  sp, 0*4
+    l32i.n a2,  sp, 2*4
+    l32i.n a3,  sp, 3*4
+    l32i.n a4,  sp, 4*4
+    l32i.n a5,  sp, 5*4
+    l32i.n a6,  sp, 6*4
+    l32i.n a7,  sp, 7*4
+    l32i.n a8,  sp, 8*4
+    l32i.n a9,  sp, 9*4
+    l32i.n a10, sp, 10*4
+    l32i.n a11, sp, 11*4
+    l32i.n a12, sp, 12*4
+    l32i.n a13, sp, 13*4
+    l32i.n a14, sp, 14*4
+    l32i.n a15, sp, 15*4
+
+    /* 4. Restauration du pointeur de pile */
     addi sp, sp, 96
+.endm
 
-    /* Return From Exception (restaure automatiquement le PC depuis EPC1) */
-    rfe
+.macro call_isr isr_name
+    SaveCpuContext
+    mov a2, sp                  /* Passe le pointeur de contexte au handler C (ABI Call0) */
+    call0 \isr_name
+    RestoreCpuContext
+.endm
+
+/* =======================================================================================
+   TABLE DES VECTEURS D'INTERRUPTION (IRAM, Alignée sur 1024 octets)
+   ======================================================================================= */
+
+.section .iram0.vectors, "ax"
+.global _vector_base
+.type _vector_base, @function
+.balign 1024
+
+_vector_base:
+
+    .org 0x000
+    WindowVectors:
+        rfwo
+
+    .org 0x180
+    Level2InterruptVector:
+        j Level2InterruptVectorHandler
+
+    .org 0x1C0
+    Level3InterruptVector:
+        j Level3InterruptVectorHandler
+
+    .org 0x200
+    Level4InterruptVector:
+        j Level4InterruptVectorHandler
+
+    .org 0x240
+    Level5InterruptVector:
+        j Level5InterruptVectorHandler
+
+    .org 0x280
+    DebugExceptionVector:
+        1: j 1b
+
+    .org 0x2C0
+    NMIExceptionVector:
+        1: j 1b
+
+    .org 0x300
+    Level1KernelInterruptVector:
+        j Level1KernelInterruptVectorHandler
+
+    .org 0x340
+    Level1UserInterruptVector:
+        j Level1UserInterruptVectorHandler
+
+    .org 0x3C0
+    DoubleExceptionVector:
+        1: j 1b
+
+.size _vector_base, .-_vector_base
+
+/* =======================================================================================
+   GESTIONNAIRES DE VECTEURS (HANDLERS)
+   ======================================================================================= */
+
+.section .iram0.text, "ax"
+.global _vector_handlers
+.type _vector_handlers, @function
+.align 4
+
+.extern c_interrupt_handler
+
+_vector_handlers:
+
+    Level2InterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfi 2
+
+    Level3InterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfi 3
+
+    Level4InterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfi 4
+
+    Level5InterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfi 5
+
+    Level1KernelInterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfe
+
+    Level1UserInterruptVectorHandler:
+        call_isr c_interrupt_handler
+        rfe
+
+.size _vector_handlers, .-_vector_handlers
+
+/* =======================================================================================
+   FONCTIONS UTILITAIRES LOW-LEVEL
+   ======================================================================================= */
+
+.section .iram0.text, "ax"
+.align 4
+.global enable_irq
+.type enable_irq, @function
+enable_irq:
+    wsr a2, INTENABLE
+    rsync
+    ret
+.size enable_irq, .-enable_irq
+
+.section .iram0.text, "ax"
+.align 4
+.global disable_irq
+.type disable_irq, @function
+disable_irq:
+    wsr a2, INTCLEAR
+    rsync
+    ret
+.size disable_irq, .-disable_irq
+
+.section .iram0.text, "ax"
+.align 4
+.global set_cpu_private_timer
+.type set_cpu_private_timer, @function
+set_cpu_private_timer:
+    beqi a2, 0, .L_timer0
+    beqi a2, 1, .L_timer1
+    beqi a2, 2, .L_timer2
+    ret
+.L_timer0:
+    rsr  a11, ccount
+    add  a11, a11, a3
+    wsr  a11, ccompare0
+    rsync
+    ret
+.L_timer1:
+    rsr  a11, ccount
+    add  a11, a11, a3
+    wsr  a11, ccompare1
+    rsync
+    ret
+.L_timer2:
+    rsr  a11, ccount
+    add  a11, a11, a3
+    wsr  a11, ccompare2
+    rsync
+    ret
+.size set_cpu_private_timer, .-set_cpu_private_timer
