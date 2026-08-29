@@ -23,11 +23,7 @@ typedef struct {
     uint32_t exccause;
 } interrupt_context_t;
 
-void xtensa_set_vecbase(const void *base);
-void xtensa_enable_interrupts(uint32_t mask);
-void xtensa_clear_interrupts(uint32_t mask);
-void xtensa_set_ps(uint32_t ps);
-
+void c_interrupt_handler(interrupt_context_t *ctx);
 void init_interrupts(void);
 
 #endif /* INTERRUPTS_H */
