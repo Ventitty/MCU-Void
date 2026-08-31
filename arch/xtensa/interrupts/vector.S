@@ -9,11 +9,9 @@
    MACROS DE SAUVEGARDE ET RESTAURATION DU CONTEXTE CPU (Compatible Call0 ABI)
    ======================================================================================= */
 
-.macro SaveCpuContext
-    /* 1. Allocation de la trame de pile (96 octets alignés sur 16) */
+.macro SaveCpuContext level
     addi sp, sp, -96
 
-    /* 2. Sauvegarde des registres généraux */
     s32i.n a0,  sp, 0*4
     s32i.n a2,  sp, 2*4
     s32i.n a3,  sp, 3*4
@@ -30,43 +28,49 @@
     s32i.n a14, sp, 14*4
     s32i.n a15, sp, 15*4
 
-    /* Sauvegarde du SP original (a1) à l'offset 4 */
     addi a2, sp, 96
     s32i.n a2, sp, 1*4
 
-    /* 3. Sauvegarde des registres spéciaux */
-    rsr a2, epc1
-    s32i a2, sp, 16*4
-
-    /* On sauvegarde le PS du processeur dans le slot 17*4 */
-    rsr a2, ps
-    s32i a2, sp, 17*4
+    /* Sauvegarde EPCx et registre d'état */
+    .if \level == 1
+        rsr a2, epc1
+        s32i a2, sp, 16*4
+        rsr a2, ps
+        s32i a2, sp, 17*4
+    .else
+        rsr a2, epc\level
+        s32i a2, sp, 16*4
+        rsr a2, eps\level
+        s32i a2, sp, 17*4
+    .endif
 
     rsr a2, sar
     s32i a2, sp, 18*4
 
     rsr a2, exccause
     s32i a2, sp, 19*4
-
-    /* 4. Désactivation de PS.EXCM (Bit 4) pour autoriser l'exécution du C */
-    rsr a2, ps
-    movi a3, ~0x10
-    and a2, a2, a3
-    wsr a2, ps
-    rsync
 .endm
 
-.macro RestoreCpuContext
-    /* 1. Restauration du PS de la tâche depuis la pile avec PS.EXCM (bit 4) activé */
+.macro RestoreCpuContext level
+    /* 1. Restauration du registre d'état */
     l32i a2, sp, 17*4
-    movi a3, 0x10
-    or a2, a2, a3
-    wsr a2, ps
+    .if \level == 1
+        /* Forcer EXCM=1 (bit 0x10) pour sécuriser le dépilement avant rfe */
+        movi a3, 0x10
+        or a2, a2, a3
+        wsr a2, ps
+    .else
+        wsr a2, eps\level
+    .endif
     rsync
 
-    /* 2. Restauration des registres spéciaux */
+    /* 2. Restauration de EPCx */
     l32i a2, sp, 16*4
-    wsr a2, epc1
+    .if \level == 1
+        wsr a2, epc1
+    .else
+        wsr a2, epc\level
+    .endif
 
     l32i a2, sp, 18*4
     wsr a2, sar
@@ -93,11 +97,12 @@
     l32i.n sp, sp, 1*4
 .endm
 
-.macro call_isr isr_name
-    SaveCpuContext
-    mov a2, sp                  /* Passe le pointeur de contexte au handler C (ABI Call0) */
+.macro call_isr isr_name, level
+    SaveCpuContext \level
+    mov a2, sp
     call0 \isr_name
-    RestoreCpuContext
+    mov sp, a2            /* <-- Met à jour SP avec le pointeur retourné par l'ISR */
+    RestoreCpuContext \level
 .endm
 
 /* =======================================================================================
@@ -167,27 +172,27 @@ _vector_base:
 _vector_handlers:
 
     Level2InterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 2
         rfi 2
 
     Level3InterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 3
         rfi 3
 
     Level4InterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 4
         rfi 4
 
     Level5InterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 5
         rfi 5
 
     Level1KernelInterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 1
         rfe
 
     Level1UserInterruptVectorHandler:
-        call_isr c_interrupt_handler
+        call_isr c_interrupt_handler, 1
         rfe
 
 .size _vector_handlers, .-_vector_handlers
@@ -196,26 +201,7 @@ _vector_handlers:
    FONCTIONS UTILITAIRES LOW-LEVEL
    ======================================================================================= */
 
-.section .iram0.text, "ax"
-.align 4
-.global enable_irq
-.type enable_irq, @function
-enable_irq:
-    wsr a2, INTENABLE
-    rsync
-    ret
-.size enable_irq, .-enable_irq
-
-.section .iram0.text, "ax"
-.align 4
-.global disable_irq
-.type disable_irq, @function
-disable_irq:
-    wsr a2, INTCLEAR
-    rsync
-    ret
-.size disable_irq, .-disable_irq
-
+/* Correction de set_cpu_private_timer : utilisation de a2 (scratch) au lieu de a11 */
 .section .iram0.text, "ax"
 .align 4
 .global set_cpu_private_timer
@@ -226,21 +212,21 @@ set_cpu_private_timer:
     beqi a2, 2, .L_timer2
     ret
 .L_timer0:
-    rsr  a11, ccount
-    add  a11, a11, a3
-    wsr  a11, ccompare0
+    rsr  a2, ccount
+    add  a2, a2, a3
+    wsr  a2, ccompare0
     rsync
     ret
 .L_timer1:
-    rsr  a11, ccount
-    add  a11, a11, a3
-    wsr  a11, ccompare1
+    rsr  a2, ccount
+    add  a2, a2, a3
+    wsr  a2, ccompare1
     rsync
     ret
 .L_timer2:
-    rsr  a11, ccount
-    add  a11, a11, a3
-    wsr  a11, ccompare2
+    rsr  a2, ccount
+    add  a2, a2, a3
+    wsr  a2, ccompare2
     rsync
     ret
 .size set_cpu_private_timer, .-set_cpu_private_timer

@@ -2,21 +2,18 @@
 #include "kernel/scheduler/scheduler.h"
 
 extern uint8_t _vector_base[];
-extern void enable_irq(uint32_t mask);
+extern void set_cpu_private_timer(int timer, uint32_t delta);
 
 void init_interrupts(void) {
     __asm__ volatile (
-        "wsr %0, vecbase\n"
-        "isync\n"
-        :
-        : "r" (_vector_base)
+        "wsr %0, vecbase\n\t"
+        "rsync"
+        :: "r"(_vector_base)
         : "memory"
     );
-
-    enable_irq(1 << 6);
 }
 
-static const char* get_exception_cause_string(uint32_t cause) {
+/* static const char* get_exception_cause_string(uint32_t cause) {
     switch (cause) {
         case 0:  return "Illegal Instruction";
         case 1:  return "System Call (Syscall)";
@@ -31,18 +28,16 @@ static const char* get_exception_cause_string(uint32_t cause) {
         case 29: return "Store Prohibit (Null pointer write / Protected memory write)";
         default: return "Unknown / Reserved Exception";
     }
-}
+} */
 
-void c_interrupt_handler(interrupt_context_t *ctx) {
-    if (ctx->exccause == 4) {
-        sched_tick(ctx);
-        return;
+interrupt_context_t* c_interrupt_handler(interrupt_context_t *ctx) {
+    uint32_t cause;
+    __asm__ volatile ("rsr %0, interrupt" : "=r"(cause));
+
+    if (cause & (1u << 6)) {
+        set_cpu_private_timer(0, 2000000);
+        return sched_tick(ctx);
     }
 
-    uart_print("[PANIC] Interrupt detected ! ");
-    uart_print(get_exception_cause_string(ctx->exccause));
-    uart_print("\n");
-
-    while (1) {
-    }
+    return ctx;
 }

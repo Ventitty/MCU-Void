@@ -57,18 +57,20 @@ static void delay(volatile uint32_t count) {
 }
 
 void test_task(void) {
-    uart_print("[test_task]\n");
     int pid = fork();
 
     if (pid == 0) {
+        uart_print("[enfant] toujours vivant\n");
+
         while (1) {
-            uart_print("[enfant] toujours vivant\n");
-            delay(1000000);
+            delay(10000000);
         }
     } else if (pid > 0) {
+        uart_print("[parent] a cree un enfant\n");
+
         while (1) {
-            uart_print("[parent] a cree un enfant\n");
-            delay(1000000);
+            uart_print_int(pid);
+            delay(10000000);
         }
     } else {
         uart_print("fork() a echoue\n");
@@ -105,12 +107,23 @@ void kernel(void) {
     uart_print("Kernel is UP ! Input text to echo it.\n\r");
 
     int t1 = sched_create_task(test_task, 4096);
+    int t2 = sched_create_task(test_task, 4096);
+    int t3 = sched_create_task(test_task, 4096);
+
 
     uart_print("[PID]: ");
     uart_print_int(t1);
     uart_print(".\n\r");
 
-    sched_start(1000000);
+    uart_print("[PID]: ");
+    uart_print_int(t2);
+    uart_print(".\n\r");
+
+    uart_print("[PID]: ");
+    uart_print_int(t3);
+    uart_print(".\n\r");
+
+    sched_start(2000000);
 
     while (1) {
         while (1) {

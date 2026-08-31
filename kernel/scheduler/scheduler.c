@@ -2,7 +2,7 @@
 
 static task_t   tasks[SCHED_MAX_TASKS];
 static int      current_task = -1;
-static size_t      task_count   = 0;
+static int      task_count   = 0;
 static uint32_t slice_ticks  = 0;
 
 extern void set_cpu_private_timer(int timer, uint32_t delta);
@@ -17,14 +17,10 @@ void sched_init(void) {
 }
 
 int sched_create_task(task_entry_t entry, size_t stack_size) {
-    if (task_count >= SCHED_MAX_TASKS) {
-        return -1;
-    }
+    if (task_count >= SCHED_MAX_TASKS) return -1;
 
     void *stack = nmap(stack_size);
-    if (stack == NULL) {
-        return -1;
-    }
+    if (stack == NULL) return -1;
 
     int id = task_count++;
     task_t *task = &tasks[id];
@@ -34,12 +30,12 @@ int sched_create_task(task_entry_t entry, size_t stack_size) {
         raw[r] = 0;
     }
 
-    /* Sommet de pile aligné sur 16 octets (masque ~0xF) */
     uint32_t top_of_stack = ((uint32_t)stack + stack_size) & ~0xF;
 
     task->ctx.a1   = top_of_stack;
     task->ctx.epc1 = (uint32_t) entry;
-    task->ctx.ps   = 0x00040000; /* WOE = 1, INTLEVEL = 0 */
+
+    task->ctx.ps   = 0x00000000;
 
     task->stack_base  = stack;
     task->stack_size  = stack_size;
@@ -54,45 +50,37 @@ int sched_get_current_pid(void) {
     return current_task;
 }
 
-void sched_tick(interrupt_context_t *ctx) {
-    set_cpu_private_timer(0, slice_ticks);
-
+interrupt_context_t* sched_tick(interrupt_context_t *ctx) {
     if (task_count == 0) {
-        return;
+        return ctx;
     }
 
-    if (current_task >= 0) {
+    if (current_task >= 0 && current_task < task_count) {
         tasks[current_task].ctx = *ctx;
     }
 
-    int current = current_task;
-    for (size_t i = 0; i < task_count; i++) {
-        current = (current + 1) % task_count;
-        if (tasks[current].state == TASK_READY) {
-            break;
-        }
+    if (current_task < 0) {
+        current_task = 0;
+    } else {
+        current_task = (current_task + 1) % task_count;
     }
 
-    current_task = current;
-    *ctx = tasks[current].ctx;
+    return &tasks[current_task].ctx;
 }
 
 void sched_start(uint32_t ticks_per_slice) {
     slice_ticks = ticks_per_slice;
 
-    /* Arme le premier tick */
     set_cpu_private_timer(0, ticks_per_slice);
 
-    /* Active WOE (bit 18) et démasque les interruptions (INTLEVEL = 0) */
     __asm__ volatile (
-        "wsr.ps %0\n\t"
-        "rsync"
-        :
-        : "r"(0x00040000)
+        "wsr %0, intenable\n\t"
+        "wsr %1, ps\n\t"
+        "rsync\n\t"
+        :: "r"(1u << 6), "r"(0)
         : "memory"
     );
 
-    /* Attente passive de la première interruption */
     while (1) {
         __asm__ volatile ("waiti 0");
     }
