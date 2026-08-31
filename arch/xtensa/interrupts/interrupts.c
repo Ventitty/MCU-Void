@@ -13,7 +13,7 @@ void init_interrupts(void) {
         : "memory"
     );
 
-    enable_irq(1u << 6);
+    enable_irq(1 << 6);
 }
 
 static const char* get_exception_cause_string(uint32_t cause) {

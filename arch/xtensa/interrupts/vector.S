@@ -1,5 +1,5 @@
 /******************************************************************************************
-  Filename    : IntVectTable.s / vector.S
+  Filename    : vector.S
   Core        : Xtensa LX7
   MCU         : ESP32-S3
   Description : Interrupt vector tables and context switching for ESP32-S3 Bare-Metal
@@ -38,6 +38,7 @@
     rsr a2, epc1
     s32i a2, sp, 16*4
 
+    /* On sauvegarde le PS du processeur dans le slot 17*4 */
     rsr a2, ps
     s32i a2, sp, 17*4
 
@@ -56,8 +57,8 @@
 .endm
 
 .macro RestoreCpuContext
-    /* 1. Réactivation de PS.EXCM (Bit 4) avant de quitter l'exception */
-    rsr a2, ps
+    /* 1. Restauration du PS de la tâche depuis la pile avec PS.EXCM (bit 4) activé */
+    l32i a2, sp, 17*4
     movi a3, 0x10
     or a2, a2, a3
     wsr a2, ps
@@ -89,7 +90,6 @@
     l32i.n a15, sp, 15*4
 
     /* 4. Restauration du pointeur de pile */
-    #addi sp, sp, 96
     l32i.n sp, sp, 1*4
 .endm
 

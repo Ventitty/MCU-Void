@@ -23,6 +23,59 @@ void uart_print(const char *str) {
     }
 }
 
+void uart_print_int(int num) {
+    char buf[12];
+    int i = 0;
+    unsigned int u;
+
+    if (num == 0) {
+        uart_putchar('0');
+        return;
+    }
+
+    if (num < 0) {
+        uart_putchar('-');
+        u = (unsigned int)(-(num + 1)) + 1;
+    } else {
+        u = (unsigned int)num;
+    }
+
+    while (u > 0) {
+        buf[i++] = '0' + (u % 10);
+        u /= 10;
+    }
+
+    while (i > 0) {
+        uart_putchar(buf[--i]);
+    }
+}
+
+static void delay(volatile uint32_t count) {
+    while (count--) {
+        __asm__ volatile ("nop");
+    }
+}
+
+void test_task(void) {
+    uart_print("[test_task]\n");
+    int pid = fork();
+
+    if (pid == 0) {
+        while (1) {
+            uart_print("[enfant] toujours vivant\n");
+            delay(1000000);
+        }
+    } else if (pid > 0) {
+        while (1) {
+            uart_print("[parent] a cree un enfant\n");
+            delay(1000000);
+        }
+    } else {
+        uart_print("fork() a echoue\n");
+        while (1);
+    }
+}
+
 void kernel(void) {
     init_interrupts();
     mm_init();
@@ -51,6 +104,14 @@ void kernel(void) {
 
     uart_print("Kernel is UP ! Input text to echo it.\n\r");
 
+    int t1 = sched_create_task(test_task, 4096);
+
+    uart_print("[PID]: ");
+    uart_print_int(t1);
+    uart_print(".\n\r");
+
+    sched_start(1000000);
+
     while (1) {
         while (1) {
             if ((UART0_STATUS & 0x1FF) > 0) {
@@ -60,5 +121,4 @@ void kernel(void) {
         }
     }
 
-    sched_start(1000000);
 }
