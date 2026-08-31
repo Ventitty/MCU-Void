@@ -1,6 +1,8 @@
 #include "arch/xtensa/interrupts/interrupts.h"
+#include "kernel/scheduler/scheduler.h"
 
 extern uint8_t _vector_base[];
+extern void enable_irq(uint32_t mask);
 
 void init_interrupts(void) {
     __asm__ volatile (
@@ -10,6 +12,8 @@ void init_interrupts(void) {
         : "r" (_vector_base)
         : "memory"
     );
+
+    enable_irq(1u << 6);
 }
 
 static const char* get_exception_cause_string(uint32_t cause) {
@@ -31,6 +35,7 @@ static const char* get_exception_cause_string(uint32_t cause) {
 
 void c_interrupt_handler(interrupt_context_t *ctx) {
     if (ctx->exccause == 4) {
+        sched_tick(ctx);
         return;
     }
 

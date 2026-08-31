@@ -1,6 +1,8 @@
 #include "kernel/memory_manager/mmu.h"
 #include "arch/xtensa/interrupts/interrupts.h"
 #include "kernel/types.h"
+#include "kernel/utils.h"
+#include "kernel/scheduler/scheduler.h"
 
 #define UART0_FIFO                ((volatile uint8_t *)0x60000000)
 
@@ -24,6 +26,7 @@ void uart_print(const char *str) {
 void kernel(void) {
     init_interrupts();
     mm_init();
+    sched_init();
 
     const char *msg = "Hello world !\n";
 
@@ -56,4 +59,6 @@ void kernel(void) {
             }
         }
     }
+
+    sched_start(1000000);
 }

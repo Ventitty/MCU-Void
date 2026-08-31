@@ -89,7 +89,8 @@
     l32i.n a15, sp, 15*4
 
     /* 4. Restauration du pointeur de pile */
-    addi sp, sp, 96
+    #addi sp, sp, 96
+    l32i.n sp, sp, 1*4
 .endm
 
 .macro call_isr isr_name
