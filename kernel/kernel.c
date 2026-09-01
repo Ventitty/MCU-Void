@@ -78,6 +78,34 @@ void test_task(void) {
     }
 }
 
+void short_lived_task(void) {
+    // La tâche fait une action rapide puis effectue son return (saute vers task_exit)
+    uart_print("[CHILD] PID ");
+    uart_print_int(sched_get_current_pid());
+    uart_print(" va s'éteindre...\n\r");
+}
+
+void test_task_recycling(void) {
+    uart_print("[TEST] Démarrage du test de recyclage de slots...\n");
+
+    // Tente de créer 50 tâches successives alors que SCHED_MAX_TASKS est réduit (ex: 4)
+    for (int i = 0; i < 50; i++) {
+        int pid = sched_create_task(short_lived_task, 1024);
+
+        if (pid < 0) {
+            uart_print("[TEST ECHEC] Plus de slots disponibles à l'itération");
+            uart_print_int(i);
+            uart_print("\n");
+            return;
+        }
+
+        // Laisse le temps à la tâche créée d'exécuter task_exit()
+        sleep_ms(1000);
+    }
+
+    uart_print("[TEST SUCCES] 50 tâches exécutées et nettoyées sans pénurie de slots !\n");
+}
+
 void kernel(void) {
     init_interrupts();
     mm_init();
@@ -106,7 +134,7 @@ void kernel(void) {
 
     uart_print("Kernel is UP ! Input text to echo it.\n\r");
 
-    int t1 = sched_create_task(test_task, 4096);
+    /*int t1 = sched_create_task(test_task, 4096);
     int t2 = sched_create_task(test_task, 4096);
     int t3 = sched_create_task(test_task, 4096);
 
@@ -121,7 +149,9 @@ void kernel(void) {
 
     uart_print("[PID]: ");
     uart_print_int(t3);
-    uart_print(".\n\r");
+    uart_print(".\n\r");*/
+
+    sched_create_task(test_task_recycling, 4096);
 
     sched_start(2000000);
 

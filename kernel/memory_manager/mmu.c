@@ -79,7 +79,7 @@ void *nmap(size_t size) {
     return NULL;
 }
 
-void  unmap(void *ptr) {
+void unmap(void *ptr) {
     if (ptr == NULL) {
         return;
     }

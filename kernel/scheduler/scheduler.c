@@ -2,27 +2,51 @@
 
 static task_t   tasks[SCHED_MAX_TASKS];
 static int      current_task = -1;
-static int      task_count   = 0;
 static uint32_t slice_ticks  = 0;
 
+static interrupt_context_t idle_ctx;
+static uint32_t idle_stack[256];
+
 extern void set_cpu_private_timer(int timer, uint32_t delta);
+
+static void idle_loop(void) {
+    while (1) {
+        __asm__ volatile ("waiti 0");
+    }
+}
 
 void sched_init(void) {
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
         tasks[i].state = TASK_UNUSED;
+        tasks[i].sleep_ticks = 0;
     }
 
     current_task = -1;
-    task_count = 0;
+
+    uint32_t *raw = (uint32_t *) &idle_ctx;
+    for (size_t r = 0; r < sizeof(idle_ctx) / sizeof(uint32_t); r++) {
+        raw[r] = 0;
+    }
+    idle_ctx.a1   = ((uint32_t) idle_stack + sizeof(idle_stack)) & ~0xF;
+    idle_ctx.epc1 = (uint32_t) idle_loop;
+    idle_ctx.ps   = 0x00000000;
 }
 
 int sched_create_task(task_entry_t entry, size_t stack_size) {
-    if (task_count >= SCHED_MAX_TASKS) return -1;
+    int id = -1;
+    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_UNUSED) {
+            id = i;
+            break;
+        }
+    }
+    if (id == -1) {
+        return -1;
+    }
 
     void *stack = nmap(stack_size);
     if (stack == NULL) return -1;
 
-    int id = task_count++;
     task_t *task = &tasks[id];
 
     uint32_t *raw = (uint32_t *) &task->ctx;
@@ -34,14 +58,16 @@ int sched_create_task(task_entry_t entry, size_t stack_size) {
 
     task->ctx.a1   = top_of_stack;
     task->ctx.epc1 = (uint32_t) entry;
-
+    task->ctx.a0   = (uint32_t) task_exit;
     task->ctx.ps   = 0x00000000;
-
     task->stack_base  = stack;
     task->stack_size  = stack_size;
     task->pid         = id;
     task->parent_pid  = -1;
+    task->sleep_ticks = 0;
     task->state       = TASK_READY;
+
+    //sched_yield();
 
     return id;
 }
@@ -51,21 +77,54 @@ int sched_get_current_pid(void) {
 }
 
 interrupt_context_t* sched_tick(interrupt_context_t *ctx) {
-    if (task_count == 0) {
-        return ctx;
+    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_BLOCKED) {
+            if (tasks[i].sleep_ticks > 0) {
+                tasks[i].sleep_ticks--;
+            }
+            if (tasks[i].sleep_ticks == 0) {
+                tasks[i].state = TASK_READY;
+            }
+        }
     }
 
-    if (current_task >= 0 && current_task < task_count) {
-        tasks[current_task].ctx = *ctx;
+    /* 2. Sauvegarde du contexte sortant */
+    if (current_task >= 0 && current_task < SCHED_MAX_TASKS) {
+        if (tasks[current_task].state != TASK_UNUSED) {
+            tasks[current_task].ctx = *ctx;
+            if (tasks[current_task].state == TASK_RUNNING) {
+                tasks[current_task].state = TASK_READY;
+            }
+        }
     }
 
-    if (current_task < 0) {
-        current_task = 0;
-    } else {
-        current_task = (current_task + 1) % task_count;
+    /* 3. Élection du prochain processus READY (Round-Robin) */
+    int start = (current_task >= 0) ? current_task : 0;
+    int next_task = start;
+    int found = 0;
+
+    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
+        next_task = (next_task + 1) % SCHED_MAX_TASKS;
+        if (tasks[next_task].state == TASK_READY) {
+            found = 1;
+            break;
+        }
     }
 
-    return &tasks[current_task].ctx;
+    if (found) {
+        current_task = next_task;
+        tasks[current_task].state = TASK_RUNNING;
+        return &tasks[current_task].ctx;
+    }
+
+    /* Tâche courante encore exécutable */
+    if (current_task >= 0 && tasks[current_task].state == TASK_RUNNING) {
+        return &tasks[current_task].ctx;
+    }
+
+    /* Aucune tâche prête : basculement vers le contexte Idle */
+    current_task = -1;
+    return &idle_ctx;
 }
 
 void sched_start(uint32_t ticks_per_slice) {
@@ -90,9 +149,15 @@ int sched_fork(interrupt_context_t *parent_ctx) {
     if (current_task < 0) {
         return -1;
     }
-    if (task_count >= SCHED_MAX_TASKS) {
-        return -1;
+
+    int id = -1;
+    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_UNUSED) {
+            id = i;
+            break;
+        }
     }
+    if (id == -1) return -1;
 
     task_t *parent = &tasks[current_task];
 
@@ -105,7 +170,6 @@ int sched_fork(interrupt_context_t *parent_ctx) {
 
     long delta = (uint8_t *) new_stack - (uint8_t *) parent->stack_base;
 
-    int id = task_count++;
     task_t *child = &tasks[id];
 
     child->ctx        = *parent_ctx;
@@ -117,6 +181,7 @@ int sched_fork(interrupt_context_t *parent_ctx) {
     child->stack_size  = parent->stack_size;
     child->pid         = id;
     child->parent_pid  = parent->pid;
+    child->sleep_ticks = 0;
     child->state       = TASK_READY;
 
     return id;
@@ -147,5 +212,45 @@ int fork(void) {
 
     snap.exccause = 4;
 
-    return sched_fork(&snap);
+    int res = sched_fork(&snap);
+    if (res > 0) {
+        sched_yield();
+    }
+    return res;
+}
+
+void sched_yield(void) {
+    __asm__ volatile (
+        "wsr %0, intset\n\t"
+        "rsync\n\t"
+        :: "r"(1u << 6)
+        : "memory"
+    );
+}
+
+void sleep_ms(uint32_t ms) {
+    if (current_task < 0) return;
+
+    tasks[current_task].sleep_ticks = ms;
+    tasks[current_task].state = TASK_BLOCKED;
+
+    sched_yield();
+}
+
+void task_exit(void) {
+    if (current_task >= 0 && current_task < SCHED_MAX_TASKS) {
+        task_t *task = &tasks[current_task];
+
+        if (task->stack_base != NULL) {
+            unmap(task->stack_base);
+            task->stack_base = NULL;
+        }
+
+        task->state = TASK_UNUSED;
+    }
+    sched_yield();
+
+    while (1) {
+        __asm__ volatile ("waiti 0");
+    }
 }
