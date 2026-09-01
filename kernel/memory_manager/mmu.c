@@ -6,6 +6,21 @@ extern uint8_t _heap_end[];
 static void *_heap_current = NULL;
 static block_t *alloc_list = NULL;
 
+static uint32_t mmu_enter_critical(void) {
+    /*uint32_t old_ps;
+    __asm__ volatile ("rsr.ps %0" : "=r"(old_ps));
+    uint32_t new_ps = (old_ps & ~0xFu) | 0xFu;
+    __asm__ volatile ("wsr.ps %0; rsync" :: "r"(new_ps));
+    return old_ps;*/
+
+    return 0;
+}
+
+static void mmu_exit_critical(uint32_t old_ps) {
+    //__asm__ volatile ("wsr.ps %0; rsync" :: "r"(old_ps));
+    (void)old_ps;
+}
+
 void  mm_init(void) {
     _heap_current = _heap_start;
     alloc_list = NULL;
@@ -33,6 +48,8 @@ void *nmap(size_t size) {
         return NULL;
     }
 
+    uint32_t saved_ps = mmu_enter_critical();
+
     size_t total_size = ALIGN_UP(size + HEADER_SIZE, 64);
     block_t *iter_free = alloc_list;
 
@@ -49,7 +66,9 @@ void *nmap(size_t size) {
             }
 
             iter_free->free = 0;
-            return (uint8_t *) iter_free + HEADER_SIZE;
+            void * res = (uint8_t *) iter_free + HEADER_SIZE;
+            mmu_exit_critical(saved_ps);
+            return res;
         }
 
         iter_free = iter_free->next;
@@ -73,9 +92,12 @@ void *nmap(size_t size) {
             iter_free->next = new_alloc;
         }
 
-        return (uint8_t *) new_alloc + HEADER_SIZE;
+        void * res = (uint8_t *) new_alloc + HEADER_SIZE;
+        mmu_exit_critical(saved_ps);
+        return res;
     }
 
+    mmu_exit_critical(saved_ps);
     return NULL;
 }
 
@@ -83,6 +105,8 @@ void unmap(void *ptr) {
     if (ptr == NULL) {
         return;
     }
+
+    uint32_t saved_ps = mmu_enter_critical();
 
     block_t *b = (block_t *)((uint8_t *) ptr - HEADER_SIZE);
     b->free = 1;
@@ -96,4 +120,6 @@ void unmap(void *ptr) {
             cur = cur->next;
         }
     }
+
+    mmu_exit_critical(saved_ps);
 }

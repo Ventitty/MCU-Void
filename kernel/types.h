@@ -15,5 +15,6 @@ typedef __typeof__(sizeof(0)) size_t;
 #define NULL ((void *)0)
 
 void uart_print(const char *str);
+void uart_print_int(int num);
 
 #endif /* TYPES_H */

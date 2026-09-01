@@ -1,4 +1,5 @@
 #include "kernel/scheduler/scheduler.h"
+#include "kernel/utils.h"
 
 static task_t   tasks[SCHED_MAX_TASKS];
 static int      current_task = -1;
@@ -23,13 +24,17 @@ void sched_init(void) {
 
     current_task = -1;
 
-    uint32_t *raw = (uint32_t *) &idle_ctx;
-    for (size_t r = 0; r < sizeof(idle_ctx) / sizeof(uint32_t); r++) {
-        raw[r] = 0;
-    }
+    memset(&idle_ctx, 0, sizeof(idle_ctx));
     idle_ctx.a1   = ((uint32_t) idle_stack + sizeof(idle_stack)) & ~0xF;
     idle_ctx.epc1 = (uint32_t) idle_loop;
     idle_ctx.ps   = 0x00000000;
+}
+
+static void task_wrapper(void) {
+    if (current_task >= 0 && tasks[current_task].entry != NULL) {
+        tasks[current_task].entry();
+    }
+    task_exit(); /* Garanti d'être appelé à la fin du return de la tâche */
 }
 
 int sched_create_task(task_entry_t entry, size_t stack_size) {
@@ -49,15 +54,13 @@ int sched_create_task(task_entry_t entry, size_t stack_size) {
 
     task_t *task = &tasks[id];
 
-    uint32_t *raw = (uint32_t *) &task->ctx;
-    for (int r = 0; r < (int) (sizeof(task->ctx) / sizeof(uint32_t)); r++) {
-        raw[r] = 0;
-    }
+    memset(&task->ctx, 0, sizeof(task->ctx));
 
     uint32_t top_of_stack = ((uint32_t)stack + stack_size) & ~0xF;
 
+    task->entry = entry;
     task->ctx.a1   = top_of_stack;
-    task->ctx.epc1 = (uint32_t) entry;
+    task->ctx.epc1 = (uint32_t) task_wrapper;
     task->ctx.a0   = (uint32_t) task_exit;
     task->ctx.ps   = 0x00000000;
     task->stack_base  = stack;
@@ -77,14 +80,24 @@ int sched_get_current_pid(void) {
 }
 
 interrupt_context_t* sched_tick(interrupt_context_t *ctx) {
+    set_cpu_private_timer(0, slice_ticks);
+
+    /* 1. Décrémentation du sommeil */
     for (int i = 0; i < SCHED_MAX_TASKS; i++) {
         if (tasks[i].state == TASK_BLOCKED) {
             if (tasks[i].sleep_ticks > 0) {
                 tasks[i].sleep_ticks--;
             }
+
             if (tasks[i].sleep_ticks == 0) {
                 tasks[i].state = TASK_READY;
             }
+        } else if (tasks[i].state == TASK_DEAD) {
+            if (tasks[i].stack_base != NULL) {
+                unmap(tasks[i].stack_base);
+                tasks[i].stack_base = NULL;
+            }
+            tasks[i].state = TASK_UNUSED;
         }
     }
 
@@ -98,7 +111,7 @@ interrupt_context_t* sched_tick(interrupt_context_t *ctx) {
         }
     }
 
-    /* 3. Élection du prochain processus READY (Round-Robin) */
+    /* 3. Élection du prochain processus (Round-Robin) */
     int start = (current_task >= 0) ? current_task : 0;
     int next_task = start;
     int found = 0;
@@ -117,12 +130,10 @@ interrupt_context_t* sched_tick(interrupt_context_t *ctx) {
         return &tasks[current_task].ctx;
     }
 
-    /* Tâche courante encore exécutable */
     if (current_task >= 0 && tasks[current_task].state == TASK_RUNNING) {
         return &tasks[current_task].ctx;
     }
 
-    /* Aucune tâche prête : basculement vers le contexte Idle */
     current_task = -1;
     return &idle_ctx;
 }
@@ -212,18 +223,18 @@ int fork(void) {
 
     snap.exccause = 4;
 
-    int res = sched_fork(&snap);
-    if (res > 0) {
-        sched_yield();
-    }
-    return res;
+    return sched_fork(&snap);
 }
 
 void sched_yield(void) {
+    uint32_t now;
+    __asm__ volatile ("rsr.ccount %0" : "=r"(now));
+
     __asm__ volatile (
-        "wsr %0, intset\n\t"
+        "wsr %0, ccompare0\n\t"
         "rsync\n\t"
-        :: "r"(1u << 6)
+        "waiti 0\n\t"
+        :: "r"(now + 10000)
         : "memory"
     );
 }
@@ -231,7 +242,12 @@ void sched_yield(void) {
 void sleep_ms(uint32_t ms) {
     if (current_task < 0) return;
 
-    tasks[current_task].sleep_ticks = ms;
+    //uint32_t now;
+    //__asm__ volatile ("rsr.ccount %0" : "=r"(now));
+
+    //uint32_t delta_cycles = (uint32_t) ((ms * ASSUMED_CPU_FREQ_HZ) / 1000u);
+
+    tasks[current_task].sleep_ticks = ms; //now + delta_cycles;
     tasks[current_task].state = TASK_BLOCKED;
 
     sched_yield();
@@ -241,16 +257,46 @@ void task_exit(void) {
     if (current_task >= 0 && current_task < SCHED_MAX_TASKS) {
         task_t *task = &tasks[current_task];
 
-        if (task->stack_base != NULL) {
+        /*if (task->stack_base != NULL) {
             unmap(task->stack_base);
             task->stack_base = NULL;
-        }
+        }*/
 
-        task->state = TASK_UNUSED;
+        task->state = TASK_DEAD;
     }
     sched_yield();
 
     while (1) {
         __asm__ volatile ("waiti 0");
     }
+}
+
+int sched_suspend(int pid) {
+    if (pid < 0 || pid >= SCHED_MAX_TASKS) {
+        return -1;
+    }
+    if (tasks[pid].state == TASK_UNUSED) {
+        return -1;
+    }
+
+    tasks[pid].state = TASK_SUSPENDED;
+
+    if (pid == current_task) {
+        sched_yield();
+    }
+
+    return 0;
+}
+
+int sched_resume(int pid) {
+    if (pid < 0 || pid >= SCHED_MAX_TASKS) {
+        return -1;
+    }
+    if (tasks[pid].state != TASK_SUSPENDED) {
+        return -1;
+    }
+
+    tasks[pid].state = TASK_READY;
+
+    return 0;
 }

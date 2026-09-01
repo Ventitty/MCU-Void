@@ -6,7 +6,10 @@
 #include "arch/xtensa/interrupts/interrupts.h"
 #include "kernel/memory_manager/mmu.h"
 
+#define ASSUMED_CPU_FREQ_HZ 40000
 #define SCHED_MAX_TASKS 8
+
+typedef void (*task_entry_t)(void);
 
 typedef enum {
     TASK_UNUSED = 0,
@@ -14,6 +17,7 @@ typedef enum {
     TASK_RUNNING,
     TASK_BLOCKED,
     TASK_SUSPENDED,
+    TASK_DEAD
 } task_state_t;
 
 typedef struct {
@@ -24,9 +28,8 @@ typedef struct {
     int      pid;
     int      parent_pid;
     uint32_t            sleep_ticks;
+    task_entry_t entry;
 } task_t;
-
-typedef void (*task_entry_t)(void);
 
 void sched_init(void);
 int sched_create_task(task_entry_t entry, size_t stack_size);
@@ -40,5 +43,8 @@ int fork(void);
 void task_exit(void);
 void sleep_ms(uint32_t ms);
 void sched_yield(void);
+
+int sched_suspend(int pid);
+int sched_resume(int pid);
 
 #endif /* SCHEDULER_H */
