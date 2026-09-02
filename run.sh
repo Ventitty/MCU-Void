@@ -2,8 +2,8 @@
 set -e
 
 CHIP="esp32s3"
-CC="xtensa-esp-elf/bin/xtensa-${CHIP}-elf-gcc"
-QEMU="qemu/bin/qemu-system-xtensa"
+CC="arch/xtensa/xtensa-esp-elf/bin/xtensa-${CHIP}-elf-gcc"
+QEMU="arch/xtensa/xtensa-esp-elf/bin/qemu-system-xtensa"
 INCLUDES="-I."
 
 SRC_DIR="kernel"
