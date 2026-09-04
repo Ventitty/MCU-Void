@@ -1,5 +1,6 @@
 #include "arch/xtensa/interrupts/interrupts.h"
 #include "kernel/scheduler/scheduler.h"
+#include "arch/xtensa/drivers/cores/smp.h"
 
 extern uint8_t _vector_base[];
 extern void set_cpu_private_timer(int timer, uint32_t delta);
@@ -37,6 +38,15 @@ interrupt_context_t* c_interrupt_handler(interrupt_context_t *ctx) {
     if (cause & (1u << 6)) {
         set_cpu_private_timer(0, 2000000);
         return sched_tick(ctx);
+    }
+
+    if (cause & (1u << 7)) {
+        /* IPI -- voir smp.c pour le routage vers cette ligne et
+         * l'acquittement. Ne modifie pas *ctx : contrairement au tick
+         * du scheduler, une IPI ne change pas quelle tâche tourne sur
+         * CE cœur, elle exécute juste le handler enregistré en plus. */
+        smp_ipi_dispatch_local();
+        return ctx;
     }
 
     return ctx;

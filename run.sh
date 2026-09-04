@@ -23,7 +23,12 @@ ${CC} -nostdlib -T ${LINKER_SCRIPT} -g -fno-tree-loop-distribute-patterns -mtext
     -mabi=call0 \
     ${INCLUDES} \
     -o ${KERNEL_ELF} \
-    ${ARCH_DIR}/boot/boot.S ${SRC_DIR}/kernel.c ${SRC_DIR}/utils.c ${SRC_DIR}/memory_manager/mmu.c ${SRC_DIR}/scheduler/scheduler.c ${ARCH_DIR}/interrupts/interrupts.c ${ARCH_DIR}/interrupts/vector.S
+    ${ARCH_DIR}/boot/boot.S ${ARCH_DIR}/drivers/cores/smp.S ${SRC_DIR}/kernel.c ${SRC_DIR}/utils.c ${SRC_DIR}/memory_manager/mmu.c ${SRC_DIR}/scheduler/scheduler.c ${ARCH_DIR}/interrupts/interrupts.c ${ARCH_DIR}/interrupts/vector.S ${SRC_DIR}/scheduler/spinlock.c ${ARCH_DIR}/drivers/cores/smp.c \
+    -lgcc
+    # -lgcc : fournit __udivdi3 (division 64 bits, utilisée par
+    # sleep_ms()) et autres routines logicielles générées par le
+    # compilateur -- ce n'est PAS une libc, juste des aides fournies par
+    # le compilateur lui-même, donc compatible avec -nostdlib.
 
 echo "Succès : ${KERNEL_ELF} généré."
 

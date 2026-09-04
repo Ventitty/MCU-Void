@@ -8,6 +8,14 @@ STACK_SIZE = 0x4000;
 
 ENTRY(_ResetVector)
 
+/* Fonction de la ROM Espressif -- ce n'est pas du code compilé dans ce
+ * projet, juste un symbole pointant vers une adresse fixe en ROM.
+ * Sans cette ligne, le linker échoue sur "undefined reference to
+ * ets_set_appcpu_boot_addr" (appelée par smp_start_core1).
+ * Adresse vérifiée dans :
+ *   esp-idf/components/esp_rom/esp32s3/ld/esp32s3.rom.ld:51 */
+PROVIDE ( ets_set_appcpu_boot_addr = 0x40000720 );
+
 SECTIONS
 {
     .ResetVector.text : {

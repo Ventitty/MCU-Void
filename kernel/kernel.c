@@ -3,16 +3,25 @@
 #include "kernel/types.h"
 #include "kernel/utils.h"
 #include "kernel/scheduler/scheduler.h"
+#include "arch/xtensa/drivers/cores/smp.h"
+#include "kernel/scheduler/spinlock.h"
 
 #define UART0_FIFO                ((volatile uint8_t *)0x60000000)
 
 volatile int trigger_div_zero = 0;
+
+/* uart_print() est maintenant appelée depuis les DEUX cœurs -- sans
+ * verrou, deux appels concurrents peuvent entrelacer leurs caractères
+ * de façon illisible. */
+//static spinlock_t uart_lock = SPINLOCK_INIT;
 
 void uart_putchar(char c) {
     *UART0_FIFO = c;
 }
 
 void uart_print(const char *str) {
+    //spinlock_acquire(&uart_lock);
+
     while (*str != '\0') {
         if (*str == '\n') {
             uart_putchar('\r');
@@ -21,8 +30,16 @@ void uart_print(const char *str) {
         uart_putchar(*str);
         str++;
     }
+
+    //spinlock_release(&uart_lock);
 }
 
+/* Note : contrairement à uart_print(), cette fonction écrit directement
+ * via uart_putchar() SANS passer par uart_lock -- un appel concurrent
+ * depuis l'autre cœur pendant un uart_print_int() peut donc encore
+ * entrelacer des caractères. Pas de souci pour la démo SMP ci-dessous
+ * (le cœur 1 n'utilise que uart_print()), mais à corriger avant
+ * d'appeler uart_print_int() depuis plusieurs cœurs en pratique. */
 void uart_print_int(int num) {
     char buf[12];
     int i = 0;
@@ -164,6 +181,35 @@ void echo(void) {
     }
 }
 
+/* Démo SMP : le cœur 1 tourne cette boucle en parallèle du scheduler du
+ * cœur 0. uart_print() (protégée par uart_lock) prouve que les deux
+ * cœurs peuvent écrire sur le même périphérique sans se corrompre. */
+static volatile int core1_ipi_received = 0;
+
+static void core1_ipi_handler(void) {
+    core1_ipi_received = 1;
+}
+
+void core1_task(void) {
+    smp_ipi_register_handler(0, core1_ipi_handler); /* IPI venant du cœur 0 */
+
+    uart_print("[core1] demarre, en attente d'une IPI du coeur 0...\n\r");
+
+    while (!core1_ipi_received) {
+        __asm__ volatile ("waiti 0");
+    }
+
+    uart_print("[core1] IPI recue ! Le coeur 0 est bien arrive jusqu'ici.\n\r");
+
+    int counter = 0;
+    while (1) {
+        uart_print("[core1] vivant, compteur = ");
+        uart_print_int(counter++);
+        uart_print("\n\r");
+        delay(20000000);
+    }
+}
+
 void kernel(void) {
     init_interrupts();
     mm_init();
@@ -193,26 +239,33 @@ void kernel(void) {
     uart_print(alloc);
 
     /*int t1 = sched_create_task(test_task, 4096);
-    int t2 = sched_create_task(test_task, 4096);
-    int t3 = sched_create_task(test_task, 4096);
-
-
-    uart_print("[PID]: ");
-    uart_print_int(t1);
-    uart_print(".\n\r");
-
-    uart_print("[PID]: ");
-    uart_print_int(t2);
-    uart_print(".\n\r");
-
-    uart_print("[PID]: ");
-    uart_print_int(t3);
-    uart_print(".\n\r");*/
+     *    int t2 = sched_create_task(test_task, 4096);
+     *    int t3 = sched_create_task(test_task, 4096);
+     *
+     *
+     *    uart_print("[PID]: ");
+     *    uart_print_int(t1);
+     *    uart_print(".\n\r");
+     *
+     *    uart_print("[PID]: ");
+     *    uart_print_int(t2);
+     *    uart_print(".\n\r");
+     *
+     *    uart_print("[PID]: ");
+     *    uart_print_int(t3);
+     *    uart_print(".\n\r");*/
 
     //sched_create_task(test_task_recycling, 4096);
     //sched_create_task(test_fork_isolation, 4096);
 
     sched_create_task(echo, 4096);
+
+    /* Démo SMP : démarre le cœur 1, puis lui envoie une IPI pour
+     * prouver que la communication inter-cœurs fonctionne dans les deux
+     * sens (démarrage + interruption). */
+    smp_start_core1(core1_task);
+    delay(5000000); /* laisse le temps au cœur 1 de s'initialiser avant l'IPI */
+    smp_send_ipi(1);
 
     sched_start(2000000);
 }
