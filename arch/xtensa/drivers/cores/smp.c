@@ -1,25 +1,29 @@
 #include "arch/xtensa/drivers/cores/smp.h"
 
-#define RTC_CNTL_OPTIONS0_REG          (*(volatile uint32_t *) 0x60008000u)
+/* Registres RTC CNTL (ESP32) */
+#define RTC_CNTL_OPTIONS0_REG          (*(volatile uint32_t *) 0x3FF48000u)
 #define RTC_CNTL_SW_STALL_APPCPU_C0_M  0x3u
 
-#define RTC_CNTL_SW_CPU_STALL_REG      (*(volatile uint32_t *) 0x600080BCu)
+#define RTC_CNTL_SW_CPU_STALL_REG      (*(volatile uint32_t *) 0x3FF480ACu)
 #define RTC_CNTL_SW_STALL_APPCPU_C1_M  (0x3Fu << 20)
 
-#define SYSTEM_CORE_1_CONTROL_0_REG      (*(volatile uint32_t *) 0x600C0000u)
-#define SYSTEM_CONTROL_CORE_1_RUNSTALL   (1u << 0)
-#define SYSTEM_CONTROL_CORE_1_CLKGATE_EN (1u << 1)
-#define SYSTEM_CONTROL_CORE_1_RESETING   (1u << 2)
+/* Registres DPORT pour le contrôle du Coeur 1 / APP CPU (ESP32) */
+#define DPORT_APPCPU_BOOT_ADDR_REG     (*(volatile uint32_t *) 0x3FF000C8u)
+#define DPORT_APPCPU_CTRL_A_REG        (*(volatile uint32_t *) 0x3FF0002Cu)
+#define DPORT_APPCPU_CTRL_B_REG        (*(volatile uint32_t *) 0x3FF00030u)
 
-#define SYSTEM_CORE_1_CONTROL_1_REG      (*(volatile uint32_t *) 0x600C0004u)
+#define DPORT_APPCPU_RESETTING         (1u << 0)
+#define DPORT_APPCPU_CLKGATE_EN        (1u << 0)
 
-#define SYSTEM_CPU_INTR_FROM_CPU_0_REG (*(volatile uint32_t *) 0x600C0030u)
-#define SYSTEM_CPU_INTR_FROM_CPU_1_REG (*(volatile uint32_t *) 0x600C0034u)
-#define SYSTEM_CPU_INTR_FROM_CPU_0     (1u << 0)
-#define SYSTEM_CPU_INTR_FROM_CPU_1     (1u << 0)
+/* Registres IPI (Software Interrupts DPORT) */
+#define DPORT_CPU_INTR_FROM_CPU_0_REG  (*(volatile uint32_t *) 0x3FF000DCu)
+#define DPORT_CPU_INTR_FROM_CPU_1_REG  (*(volatile uint32_t *) 0x3FF000E0u)
+#define DPORT_CPU_INTR_FROM_CPU_0      (1u << 0)
+#define DPORT_CPU_INTR_FROM_CPU_1      (1u << 0)
 
-#define INTERRUPT_CORE0_CPU_INTR_FROM_CPU_1_MAP_REG (*(volatile uint32_t *) 0x600C2140u)
-#define INTERRUPT_CORE1_CPU_INTR_FROM_CPU_0_MAP_REG (*(volatile uint32_t *) 0x600C293Cu)
+/* Matrice d'interruptions ESP32 (PRO CPU = Core 0, APP CPU = Core 1) */
+#define DPORT_PRO_CPU_INTR_FROM_CPU_1_MAP_REG (*(volatile uint32_t *) 0x3FF101B8u)
+#define DPORT_APP_CPU_INTR_FROM_CPU_0_MAP_REG (*(volatile uint32_t *) 0x3FF111B4u)
 
 #define IPI_CPU_LINE 7
 
@@ -35,40 +39,41 @@ int smp_get_core_id(void) {
 }
 
 static void mark(char c) {
-    *((volatile uint8_t *) 0x60000000u) = (uint8_t) c;
+    /* Adresse FIFO de l'UART0 sur ESP32 classique */
+    *((volatile uint8_t *) 0x3FF40000u) = (uint8_t) c;
 }
 
+#define RTC_CNTL_STORE5_REG (*(volatile uint32_t *) 0x3FF480B4u)
+
 void smp_start_core1(void (*entry)(void)) {
-    mark('a');
     core1_user_entry = entry;
 
-    INTERRUPT_CORE0_CPU_INTR_FROM_CPU_1_MAP_REG = IPI_CPU_LINE;
-    mark('b');
+    /* Routage IPI pour le cœur 0 */
+    DPORT_PRO_CPU_INTR_FROM_CPU_1_MAP_REG = IPI_CPU_LINE;
 
+    /* 1. Adresse de boot lue par la ROM ESP32 / QEMU pour le cœur 1 */
+    RTC_CNTL_STORE5_REG = (uint32_t) _core1_entry;
+    DPORT_APPCPU_BOOT_ADDR_REG = (uint32_t) _core1_entry;
+
+    /* 2. Déblocage du stall RTC */
     RTC_CNTL_OPTIONS0_REG &= ~RTC_CNTL_SW_STALL_APPCPU_C0_M;
     RTC_CNTL_SW_CPU_STALL_REG &= ~RTC_CNTL_SW_STALL_APPCPU_C1_M;
-    mark('c');
 
-    SYSTEM_CORE_1_CONTROL_1_REG = (uint32_t) _core1_entry;
-    mark('d');
-
-    if (!(SYSTEM_CORE_1_CONTROL_0_REG & SYSTEM_CONTROL_CORE_1_CLKGATE_EN)) {
-        SYSTEM_CORE_1_CONTROL_0_REG |= SYSTEM_CONTROL_CORE_1_CLKGATE_EN;
-        SYSTEM_CORE_1_CONTROL_0_REG &= ~SYSTEM_CONTROL_CORE_1_RUNSTALL;
-        SYSTEM_CORE_1_CONTROL_0_REG |= SYSTEM_CONTROL_CORE_1_RESETING;
-        SYSTEM_CORE_1_CONTROL_0_REG &= ~SYSTEM_CONTROL_CORE_1_RESETING;
-    }
-
-    mark('e');
+    /* 3. Déblocage DPORT du cœur 1 */
+    DPORT_APPCPU_CTRL_B_REG |= DPORT_APPCPU_CLKGATE_EN;
+    DPORT_APPCPU_CTRL_A_REG |= DPORT_APPCPU_RESETTING;
+    DPORT_APPCPU_CTRL_A_REG &= ~DPORT_APPCPU_RESETTING;
 }
 
 void core1_main(void) {
     mark('1');
 
-    INTERRUPT_CORE1_CPU_INTR_FROM_CPU_0_MAP_REG = IPI_CPU_LINE;
+    /* Routage IPI pour le cœur 1 (APP CPU) : écoute des interruptions émises par le cœur 0 */
+    DPORT_APP_CPU_INTR_FROM_CPU_0_MAP_REG = IPI_CPU_LINE;
 
-    uint32_t ps = 0;
-    __asm__ volatile ("wsr.ps %0; rsync" :: "r"(ps));
+    /* Alignement du registre d'état PS pour Call0 ABI (INTLEVEL=0, EXCM=0) */
+    uint32_t ps = 0x00000020;
+    __asm__ volatile ("wsr %0, ps; rsync" :: "r"(ps));
 
     if (core1_user_entry != NULL) {
         core1_user_entry();
@@ -85,17 +90,17 @@ void smp_send_ipi(int core_id) {
     }
 
     if (core_id == 0) {
-        SYSTEM_CPU_INTR_FROM_CPU_0_REG = SYSTEM_CPU_INTR_FROM_CPU_0;
+        DPORT_CPU_INTR_FROM_CPU_0_REG = DPORT_CPU_INTR_FROM_CPU_0;
     } else {
-        SYSTEM_CPU_INTR_FROM_CPU_1_REG = SYSTEM_CPU_INTR_FROM_CPU_1;
+        DPORT_CPU_INTR_FROM_CPU_1_REG = DPORT_CPU_INTR_FROM_CPU_1;
     }
 }
 
 static void smp_ipi_ack(int from_core) {
     if (from_core == 0) {
-        SYSTEM_CPU_INTR_FROM_CPU_0_REG = 0;
+        DPORT_CPU_INTR_FROM_CPU_0_REG = 0;
     } else {
-        SYSTEM_CPU_INTR_FROM_CPU_1_REG = 0;
+        DPORT_CPU_INTR_FROM_CPU_1_REG = 0;
     }
 }
 

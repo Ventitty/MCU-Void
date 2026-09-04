@@ -14,37 +14,18 @@ void init_interrupts(void) {
     );
 }
 
-/* static const char* get_exception_cause_string(uint32_t cause) {
-    switch (cause) {
-        case 0:  return "Illegal Instruction";
-        case 1:  return "System Call (Syscall)";
-        case 2:  return "Instruction Fetch Error";
-        case 3:  return "Load/Store Error";
-        case 4:  return "Level-1 Interrupt";
-        case 5:  return "Alloca Exception";
-        case 6:  return "Integer Divide By Zero";
-        case 9:  return "Load/Store Alignment Error";
-        case 12: return "PIF Data Error";
-        case 28: return "Load Prohibit (Null pointer read / Invalid memory access)";
-        case 29: return "Store Prohibit (Null pointer write / Protected memory write)";
-        default: return "Unknown / Reserved Exception";
-    }
-} */
-
 interrupt_context_t* c_interrupt_handler(interrupt_context_t *ctx) {
     uint32_t cause;
     __asm__ volatile ("rsr %0, interrupt" : "=r"(cause));
 
+    /* Interruption du Timer CPU (Ligne 6) */
     if (cause & (1u << 6)) {
         set_cpu_private_timer(0, 2000000);
         return sched_tick(ctx);
     }
 
+    /* Interruption inter-cœurs IPI (Ligne 7) */
     if (cause & (1u << 7)) {
-        /* IPI -- voir smp.c pour le routage vers cette ligne et
-         * l'acquittement. Ne modifie pas *ctx : contrairement au tick
-         * du scheduler, une IPI ne change pas quelle tâche tourne sur
-         * CE cœur, elle exécute juste le handler enregistré en plus. */
         smp_ipi_dispatch_local();
         return ctx;
     }

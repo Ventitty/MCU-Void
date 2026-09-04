@@ -29,6 +29,9 @@
             SDL2
             libslirp
             gdb
+
+            esptool
+            picocom
           ];
           runScript = "bash";
         };

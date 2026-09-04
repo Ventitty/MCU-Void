@@ -1,14 +1,15 @@
 MEMORY
 {
-    iram (RWX) : ORIGIN = 0x40378000, LENGTH = 0x40000  /* 256 KB IRAM */
-    dram (RW)  : ORIGIN = 0x3FC80000, LENGTH = 0x50000  /* 320 KB DRAM */
+    iram (RWX) : ORIGIN = 0x40080000, LENGTH = 0x20000  /* 128 KB IRAM (ESP32) */
+    dram (RW)  : ORIGIN = 0x3FFB0000, LENGTH = 0x40000  /* 256 KB DRAM (ESP32) */
 }
 
 STACK_SIZE = 0x4000;
 
 ENTRY(_ResetVector)
 
-PROVIDE ( ets_set_appcpu_boot_addr = 0x40000720 );
+/* Adresse ROM de ets_set_appcpu_boot_addr sur ESP32 classique */
+PROVIDE ( ets_set_appcpu_boot_addr = 0x40000680 );
 
 SECTIONS
 {

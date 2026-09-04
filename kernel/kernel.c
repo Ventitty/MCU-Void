@@ -6,14 +6,20 @@
 #include "arch/xtensa/drivers/cores/smp.h"
 #include "kernel/scheduler/spinlock.h"
 
-#define UART0_FIFO                ((volatile uint8_t *)0x60000000)
+/* Registres UART0 ESP32 */
+#define UART0_BASE        0x3FF40000u
+#define UART0_FIFO_REG    (*(volatile uint32_t *)(UART0_BASE + 0x00))
+#define UART0_STATUS_REG  (*(volatile uint32_t *)(UART0_BASE + 0x1C))
+
+/* Compteur d'octets dans la FIFO RX */
+#define UART0_RX_FIFO_CNT (UART0_STATUS_REG & 0xFFu)
 
 volatile int trigger_div_zero = 0;
-
 static spinlock_t uart_lock = SPINLOCK_INIT;
 
+/* Corrigé : Accès 32-bit obligatoire sur le bus APB ESP32 */
 void uart_putchar(char c) {
-    *UART0_FIFO = c;
+    UART0_FIFO_REG = (uint32_t)(uint8_t)c;
 }
 
 void uart_print(const char *str) {
@@ -23,7 +29,6 @@ void uart_print(const char *str) {
         if (*str == '\n') {
             uart_putchar('\r');
         }
-
         uart_putchar(*str);
         str++;
     }
@@ -64,105 +69,20 @@ static void delay(volatile uint32_t count) {
     }
 }
 
-void test_task(void) {
-    int pid = fork();
-
-    if (pid == 0) {
-        uart_print("[enfant] toujours vivant\n");
-
-        while (1) {
-            delay(10000000);
-        }
-    } else if (pid > 0) {
-        uart_print("[parent] a cree un enfant\n");
-
-        while (1) {
-            uart_print_int(pid);
-            delay(10000000);
-        }
-    } else {
-        uart_print("fork() a echoue\n");
-        while (1);
-    }
-}
-
-void short_lived_task(void) {
-    uart_print("[CHILD] PID ");
-    uart_print_int(sched_get_current_pid());
-    uart_print(" va s'éteindre...\n\r");
-}
-
-void test_task_recycling(void) {
-    uart_print("[TEST] Démarrage du test de recyclage de slots...\n");
-
-    for (int i = 0; i < 50; i++) {
-        int pid = sched_create_task(short_lived_task, 1024);
-
-        if (pid < 0) {
-            uart_print("[TEST ECHEC] Plus de slots disponibles à l'itération ");
-            uart_print_int(i);
-            uart_print("\n");
-            return;
-        }
-
-        sleep_ms(1);
-    }
-
-    uart_print("[TEST SUCCES] 50 tâches exécutées et nettoyées sans pénurie de slots !\n");
-}
-
-void test_fork_isolation(void) {
-    uart_print("[TEST FORK] Démarrage du test d'isolation de la pile...\n\r");
-
-    volatile int stack_var = 42;
-
-    int pid = fork();
-
-    if (pid < 0) {
-        uart_print("[TEST ECHEC] fork() a échoué (mémoire ou slots insuffisants)\n\r");
-    } else if (pid == 0) {
-        uart_print("[ENFANT] PID ");
-        uart_print_int(sched_get_current_pid());
-        uart_print(" : Modification de stack_var (42 -> 99)...\n\r");
-
-        stack_var = 99;
-        sleep_ms(1);
-
-        if (stack_var == 99) {
-            uart_print("[ENFANT] Variable locale vérifiée avec succès dans l'enfant.\n\r");
-        } else {
-            uart_print("[TEST ECHEC] Pile corrompue dans l'enfant !\n\r");
-        }
-
-    } else {
-        uart_print("[PARENT] Enfant créé avec PID ");
-        uart_print_int(pid);
-        uart_print(". Attente de la fin de l'enfant...\n\r");
-
-        sleep_ms(5);
-
-        if (stack_var == 42) {
-            uart_print("[PARENT] stack_var est toujours égale à 42 !\n\r");
-            uart_print("[TEST SUCCES] Isolation de la pile validée pour fork() !\n\r");
-        } else {
-            uart_print("[TEST ECHEC] La variable du parent a été altérée par l'enfant !\n\r");
-        }
-    }
-}
-
 void echo(void) {
     uart_print("Kernel is UP ! Input text to echo it.\n\r");
     uart_print("Input > ");
 
     while (1) {
-
-        if ((UART0_STATUS & 0x1FF) > 0) {
-            char c = *UART0_FIFO;
+        if (UART0_RX_FIFO_CNT > 0) {
+            char c = (char)(UART0_FIFO_REG & 0xFFu);
 
             if (c == '\r' || c == '\n') {
                 uart_putchar('\r');
                 uart_putchar('\n');
                 uart_print("Input > ");
+            } else if (c == '\b' || c == 0x7F) {
+                uart_print("\b \b");
             } else {
                 uart_putchar(c);
             }
@@ -179,7 +99,13 @@ static void core1_ipi_handler(void) {
 }
 
 void core1_task(void) {
-    smp_ipi_register_handler(0, core1_ipi_handler); /* IPI venant du cœur 0 */
+    /* Activer la ligne d'interruption IPI (bit 7) dans INTENABLE pour le Coeur 1 */
+    uint32_t intenable;
+    __asm__ volatile ("rsr.intenable %0" : "=r"(intenable));
+    intenable |= (1u << 7);
+    __asm__ volatile ("wsr.intenable %0; rsync" :: "r"(intenable));
+
+    smp_ipi_register_handler(0, core1_ipi_handler);
 
     uart_print("[core1] demarre, en attente d'une IPI du coeur 0...\n\r");
 
@@ -203,14 +129,15 @@ void kernel(void) {
     mm_init();
     sched_init();
 
+    /* Activer les lignes d'interruption Timer (bit 6) et IPI (bit 7) dans INTENABLE */
+    uint32_t intenable = (1u << 6) | (1u << 7);
+    __asm__ volatile ("wsr.intenable %0; rsync" :: "r"(intenable));
+
     uart_print("Kernel is starting...\n\r");
 
     const char *msg = "Hello world !\n";
-
     size_t len = 0;
-    while (msg[len] != '\0') {
-        len++;
-    }
+    while (msg[len] != '\0') len++;
 
     char *alloc = nmap(len + 1);
     if (alloc == NULL) {
@@ -219,33 +146,12 @@ void kernel(void) {
     }
 
     size_t i = 0;
-    for (; i < len; i++) {
-        alloc[i] = msg[i];
-    }
+    for (; i < len; i++) alloc[i] = msg[i];
     alloc[i] = '\0';
 
     uart_print(alloc);
 
-    /*int t1 = sched_create_task(test_task, 4096);
-     *    int t2 = sched_create_task(test_task, 4096);
-     *    int t3 = sched_create_task(test_task, 4096);
-     *
-     *
-     *    uart_print("[PID]: ");
-     *    uart_print_int(t1);
-     *    uart_print(".\n\r");
-     *
-     *    uart_print("[PID]: ");
-     *    uart_print_int(t2);
-     *    uart_print(".\n\r");
-     *
-     *    uart_print("[PID]: ");
-     *    uart_print_int(t3);
-     *    uart_print(".\n\r");*/
-
-    //sched_create_task(test_task_recycling, 4096);
-    //sched_create_task(test_fork_isolation, 4096);
-
+    /* Enregistrement de la tâche echo */
     sched_create_task(echo, 4096);
 
     uart_print("[1] avant smp_start_core1\n\r");
@@ -260,5 +166,6 @@ void kernel(void) {
     uart_print_int(smp_get_core_id());
     uart_print("\n\r");
 
+    /* Démarrage de l'ordonnanceur */
     sched_start(2000000);
 }

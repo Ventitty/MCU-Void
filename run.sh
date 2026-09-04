@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-CHIP="esp32s3"
+CHIP="esp32"
 CC="arch/xtensa/xtensa-esp-elf/bin/xtensa-${CHIP}-elf-gcc"
 QEMU="arch/xtensa/xtensa-esp-elf/bin/qemu-system-xtensa"
 INCLUDES="-I."

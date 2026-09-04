@@ -1,8 +1,8 @@
 /******************************************************************************************
   Filename    : vector.S
-  Core        : Xtensa LX7
-  MCU         : ESP32-S3
-  Description : Interrupt vector tables and context switching for ESP32-S3 Bare-Metal
+  Core        : Xtensa LX6
+  MCU         : ESP32
+  Description : Interrupt vector tables and context switching for ESP32 Bare-Metal
 ******************************************************************************************/
 
 /* =======================================================================================
@@ -101,7 +101,7 @@
     SaveCpuContext \level
     mov a2, sp
     call0 \isr_name
-    mov sp, a2            /* <-- Met à jour SP avec le pointeur retourné par l'ISR */
+    mov sp, a2            /* Met à jour SP avec le pointeur retourné par l'ISR */
     RestoreCpuContext \level
 .endm
 
@@ -201,7 +201,6 @@ _vector_handlers:
    FONCTIONS UTILITAIRES LOW-LEVEL
    ======================================================================================= */
 
-/* Correction de set_cpu_private_timer : utilisation de a2 (scratch) au lieu de a11 */
 .section .iram0.text, "ax"
 .align 4
 .global set_cpu_private_timer
