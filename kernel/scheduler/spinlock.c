@@ -1,50 +1,49 @@
 #include "kernel/scheduler/spinlock.h"
+#include "arch/xtensa/drivers/cores/smp.h"
 
-/*
- * kernel/smp/spinlock.c
- *
- * Ce verrou protège uniquement contre la concurrence entre CŒURS. Si le
- * code qui le prend peut aussi être interrompu par une interruption SUR
- * LE MÊME cœur qui essaierait elle-même de prendre le même verrou, il y
- * a un risque d'auto-interblocage classique -- ce fichier ne s'occupe
- * pas de ça. Pour une section critique qui doit être sûre à la fois
- * entre cœurs ET vis-à-vis des interruptions locales, combine avec les
- * fonctions de désactivation d'interruptions déjà utilisées ailleurs
- * dans ce projet (voir le motif PS.INTLEVEL dans mmu.c) autour de
- * l'acquisition/libération.
- */
-
-void spinlock_init(spinlock_t *lock) {
-    lock->locked = 0;
+static inline void barrier(void) {
+    __asm__ volatile ("memw" ::: "memory");
 }
 
-int spinlock_try_acquire(spinlock_t *lock) {
-    uint32_t result;
-    uint32_t expected = 0; /* déverrouillé */
-    uint32_t desired   = 1; /* verrouillé */
-
-    __asm__ volatile (
-        "wsr.scompare1 %2\n\t"
-        "s32c1i %0, %1, 0\n\t"
-        : "+r"(desired)
-        : "r"(&lock->locked), "r"(expected)
-        : "memory"
-    );
-    result = desired; /* s32c1i renvoie l'ancienne valeur lue dans le même registre */
-
-    return (result == 0) ? 1 : 0;
+void spinlock_init(spinlock_t *lock) {
+    lock->interested[0] = 0;
+    lock->interested[1] = 0;
+    lock->turn = 0;
+    barrier();
 }
 
 void spinlock_acquire(spinlock_t *lock) {
-    while (!spinlock_try_acquire(lock)) {
-        /* Boucle active simple. Pas de backoff/pause -- suffisant pour
-         * un premier test SMP, à améliorer si la contention devient un
-         * problème réel (par exemple avec un compteur de tentatives
-         * avant de céder la main via sched_yield()). */
+    int me    = smp_get_core_id();
+    int other = 1 - me;
+
+    lock->interested[me] = 1;
+    barrier();
+    lock->turn = (uint32_t) other;
+    barrier();
+
+
+    while (lock->interested[other] && lock->turn == (uint32_t) other) {
+
     }
+    barrier();
 }
 
 void spinlock_release(spinlock_t *lock) {
-    __asm__ volatile ("memw" ::: "memory"); /* barrière mémoire avant de relâcher */
-    lock->locked = 0;
+    int me = smp_get_core_id();
+    barrier();
+    lock->interested[me] = 0;
+}
+
+uint32_t spinlock_acquire_irqsave(spinlock_t *lock) {
+    uint32_t old_ps;
+    __asm__ volatile ("rsr.ps %0" : "=r"(old_ps));
+    __asm__ volatile ("wsr.ps %0; rsync" :: "r"((old_ps & ~0xFu) | 0xFu));
+
+    spinlock_acquire(lock);
+    return old_ps;
+}
+
+void spinlock_release_irqrestore(spinlock_t *lock, uint32_t saved_ps) {
+    spinlock_release(lock);
+    __asm__ volatile ("wsr.ps %0; rsync" :: "r"(saved_ps));
 }

@@ -10,17 +10,14 @@
 
 volatile int trigger_div_zero = 0;
 
-/* uart_print() est maintenant appelée depuis les DEUX cœurs -- sans
- * verrou, deux appels concurrents peuvent entrelacer leurs caractères
- * de façon illisible. */
-//static spinlock_t uart_lock = SPINLOCK_INIT;
+static spinlock_t uart_lock = SPINLOCK_INIT;
 
 void uart_putchar(char c) {
     *UART0_FIFO = c;
 }
 
 void uart_print(const char *str) {
-    //spinlock_acquire(&uart_lock);
+    uint32_t saved = spinlock_acquire_irqsave(&uart_lock);
 
     while (*str != '\0') {
         if (*str == '\n') {
@@ -31,15 +28,9 @@ void uart_print(const char *str) {
         str++;
     }
 
-    //spinlock_release(&uart_lock);
+    spinlock_release_irqrestore(&uart_lock, saved);
 }
 
-/* Note : contrairement à uart_print(), cette fonction écrit directement
- * via uart_putchar() SANS passer par uart_lock -- un appel concurrent
- * depuis l'autre cœur pendant un uart_print_int() peut donc encore
- * entrelacer des caractères. Pas de souci pour la démo SMP ci-dessous
- * (le cœur 1 n'utilise que uart_print()), mais à corriger avant
- * d'appeler uart_print_int() depuis plusieurs cœurs en pratique. */
 void uart_print_int(int num) {
     char buf[12];
     int i = 0;
@@ -181,9 +172,6 @@ void echo(void) {
     }
 }
 
-/* Démo SMP : le cœur 1 tourne cette boucle en parallèle du scheduler du
- * cœur 0. uart_print() (protégée par uart_lock) prouve que les deux
- * cœurs peuvent écrire sur le même périphérique sans se corrompre. */
 static volatile int core1_ipi_received = 0;
 
 static void core1_ipi_handler(void) {
@@ -260,12 +248,17 @@ void kernel(void) {
 
     sched_create_task(echo, 4096);
 
-    /* Démo SMP : démarre le cœur 1, puis lui envoie une IPI pour
-     * prouver que la communication inter-cœurs fonctionne dans les deux
-     * sens (démarrage + interruption). */
+    uart_print("[1] avant smp_start_core1\n\r");
     smp_start_core1(core1_task);
-    delay(5000000); /* laisse le temps au cœur 1 de s'initialiser avant l'IPI */
+    uart_print("[2] apres smp_start_core1\n\r");
+
+    delay(5000000);
     smp_send_ipi(1);
+    uart_print("[3] apres smp_send_ipi\n\r");
+
+    uart_print("[core0] id = ");
+    uart_print_int(smp_get_core_id());
+    uart_print("\n\r");
 
     sched_start(2000000);
 }
